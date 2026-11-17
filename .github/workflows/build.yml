@@ -61,8 +61,18 @@ jobs:
           echo "=== KOTLIN / C++ ERRORS ==="
           grep -n -E "^e: |error:|FAILED|Execution failed" build.log | head -40 || true
 
+      - name: Build log tail
+        if: always()
+        run: tail -n 25 build.log || true
+
       - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release.apk ZirCut.apk
+        run: |
+          echo "=== OUTPUT FILES ==="
+          find app/build/outputs -type f | head -40 || true
+          APK=$(find app/build/outputs -name '*.apk' | head -n 1)
+          test -n "$APK" || { echo "NO APK FOUND"; exit 1; }
+          cp "$APK" ZirCut.apk
+          ls -la ZirCut.apk
 
       - uses: actions/upload-artifact@v4
         with:
