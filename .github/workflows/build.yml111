@@ -1,0 +1,98 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack project zip (if the project was uploaded as a zip)
+        run: |
+          if [ -f zircut_project.zip ]; then
+            unzip -o zircut_project.zip
+          fi
+          for z in $(ls fix*.zip 2>/dev/null | sort -V); do
+            echo "applying $z"
+            unzip -o "$z"
+          done
+          test -f settings.gradle.kts
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install SDK, NDK and CMake
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          ls "$ANDROID_HOME" || true
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;android-34" "build-tools;34.0.0" "ndk;26.3.11579264" "cmake;3.22.1"
+
+      - name: Fetch whisper.cpp
+        run: git clone --depth 1 --branch v1.7.2 https://github.com/ggerganov/whisper.cpp app/src/main/cpp/whisper.cpp
+
+      - name: Fetch Vazirmatn font
+        run: |
+          mkdir -p app/src/main/assets/fonts
+          for f in Regular Bold ExtraBold Black; do
+            curl -fL -o app/src/main/assets/fonts/Vazirmatn-$f.ttf \
+              https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf/Vazirmatn-$f.ttf || echo "font $f skipped"
+          done
+          G=https://github.com/google/fonts/raw/main/ofl
+          curl -fL -o app/src/main/assets/fonts/Lalezar-Regular.ttf "$G/lalezar/Lalezar-Regular.ttf" || echo "Lalezar skipped"
+          curl -fL -o app/src/main/assets/fonts/Cairo.ttf "$G/cairo/Cairo%5Bslnt%2Cwght%5D.ttf" || echo "Cairo skipped"
+          curl -fL -o app/src/main/assets/fonts/Changa.ttf "$G/changa/Changa%5Bwght%5D.ttf" || echo "Changa skipped"
+          ls -la app/src/main/assets/fonts
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build release APK
+        run: |
+          set -o pipefail
+          gradle :app:assembleRelease --no-daemon --console=plain 2>&1 | tee build.log
+
+      - name: Error summary
+        if: failure()
+        run: |
+          echo "=== KOTLIN / C++ ERRORS ==="
+          grep -n -E "^e: |error:" build.log | head -30 || true
+          echo "=== FAILED TASK ==="
+          grep -n -E "FAILED|Execution failed" build.log | head -10 || true
+          echo "=== WHAT WENT WRONG ==="
+          grep -n -A8 "What went wrong" build.log | head -25 || true
+
+      - name: Build log tail
+        if: always()
+        run: tail -n 25 build.log || true
+
+      - name: Rename APK
+        run: |
+          echo "=== OUTPUT FILES ==="
+          find app/build/outputs -type f | head -40 || true
+          APK=$(find app/build/outputs -name '*.apk' | head -n 1)
+          test -n "$APK" || { echo "NO APK FOUND"; exit 1; }
+          cp "$APK" ZirCut.apk
+          ls -la ZirCut.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZirCut-apk
+          path: ZirCut.apk
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ZirCut.apk
